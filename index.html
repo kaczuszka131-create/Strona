@@ -3,22 +3,158 @@
 <head>
 <meta charset="UTF-8">
 <title>Centrum Dyspozytorskie</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
-    /* ... (stylowanie pozostaje bez zmian) ... */
+    body, html {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        font-family: Arial, sans-serif;
+    }
+    #container {
+        display: flex;
+        height: 100%;
+    }
+    #map {
+        flex: 7;
+        height: 100%;
+    }
+    #sidebar {
+        flex: 3;
+        padding: 10px;
+        overflow-y: auto;
+        background: #f4f4f4;
+        border-left: 1px solid #ccc;
+    }
+    .report-item, .unit-item {
+        background: white;
+        padding: 10px;
+        margin-bottom: 10px;
+        border-radius: 5px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        cursor: pointer;
+    }
+    .report-item:hover, .unit-item:hover {
+        background: #e9e9e9;
+    }
+    .tier-1 { border-left: 5px solid green; }
+    .tier-2 { border-left: 5px solid orange; }
+    .tier-3 { border-left: 5px solid red; }
+    .available { border-left: 5px solid green; }
+    .unavailable { border-left: 5px solid red; }
+    .on-intervention { border-left: 5px solid orange; }
+    .delete-btn {
+        float: right;
+        background: #dc3545;
+        color: white;
+        border: none;
+        border-radius: 3px;
+        cursor: pointer;
+    }
+    .assign-btn {
+        background: #007bff;
+        color: white;
+        border: none;
+        padding: 5px 10px;
+        border-radius: 3px;
+        cursor: pointer;
+        margin-top: 5px;
+    }
+    .unit-status-btn {
+        background: #6c757d;
+        color: white;
+        border: none;
+        padding: 3px 6px;
+        border-radius: 3px;
+        cursor: pointer;
+        margin-right: 5px;
+        margin-top: 5px;
+        font-size: 0.8em;
+    }
+    .form-group {
+        margin-bottom: 10px;
+    }
+    label {
+        display: block;
+        margin-bottom: 5px;
+    }
+    input, select, textarea {
+        width: 100%;
+        padding: 8px;
+        box-sizing: border-box;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+    }
+    button {
+        padding: 8px 15px;
+        background: #007bff;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+    }
+    button:hover {
+        background: #0056b3;
+    }
 </style>
 </head>
 <body>
 <div id="container">
     <div id="map"></div>
     <div id="sidebar">
-        <!-- ... (HTML pozostaje bez zmian) ... -->
+        <h2>Nowe zgłoszenie</h2>
+        <div class="form-group">
+            <label for="tier">Priorytet:</label>
+            <select id="tier">
+                <option value="1">Tier 1 (Niski)</option>
+                <option value="2">Tier 2 (Średni)</option>
+                <option value="3">Tier 3 (Wysoki)</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="description">Opis:</label>
+            <textarea id="description" rows="3"></textarea>
+        </div>
+        <div class="form-group">
+            <label for="contact">Kontakt:</label>
+            <input type="text" id="contact">
+        </div>
+        <div class="form-group">
+            <label for="status">Status:</label>
+            <select id="status">
+                <option value="nowe">Nowe</option>
+                <option value="w toku">W toku</option>
+                <option value="zakończone">Zakończone</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <p id="coordsDisplay">Nie wybrano lokalizacji</p>
+        </div>
+        <button id="createReport">Utwórz zgłoszenie</button>
+        
+        <h2>Zmień callsign jednostki</h2>
+        <div class="form-group">
+            <label for="unitIdInput">ID jednostki:</label>
+            <input type="text" id="unitIdInput">
+        </div>
+        <div class="form-group">
+            <label for="newCallsignInput">Nowy callsign:</label>
+            <input type="text" id="newCallsignInput">
+        </div>
+        <button id="changeCallsignBtn">Zmień callsign</button>
+        
+        <h2>Zgłoszenia</h2>
+        <div id="reportsList"></div>
+        
+        <h2>Jednostki</h2>
+        <div id="unitsList"></div>
     </div>
 </div>
 
-<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-const SERVER_URL = 'http://localhost:3000';
+// Użyj dynamicznego URL serwera
+const SERVER_URL = window.location.origin;
 const map = L.map('map').setView([52.0, 19.0], 6);
 
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -85,6 +221,7 @@ async function addReport(report) {
         }
     } catch (error) {
         console.error('Błąd dodawania zgłoszenia:', error);
+        alert('Błąd dodawania zgłoszenia. Sprawdź konsolę dla szczegółów.');
     }
 }
 
@@ -343,6 +480,71 @@ async function releaseUnitFromReport(reportId) {
     }
 }
 
+// --- Pobieranie danych z serwera ---
+async function fetchData() {
+    try {
+        // Pobierz wszystkie dane równolegle
+        const [positionsResponse, reportsResponse, unitsResponse] = await Promise.all([
+            fetch(`${SERVER_URL}/positions`),
+            fetch(`${SERVER_URL}/reports`),
+            fetch(`${SERVER_URL}/units`)
+        ]);
+
+        if (!positionsResponse.ok || !reportsResponse.ok || !unitsResponse.ok) {
+            throw new Error('Błąd pobierania danych');
+        }
+
+        const [positionsData, reportsData, unitsData] = await Promise.all([
+            positionsResponse.json(),
+            reportsResponse.json(),
+            unitsResponse.json()
+        ]);
+
+        // Aktualizuj jednostki
+        Object.entries(positionsData).forEach(([id, unitData]) => {
+            const existingStatus = units[id]?.status || 'available';
+            const existingName = units[id]?.name || id;
+            
+            if (!units[id] || units[id].lat !== unitData.lat || units[id].lng !== unitData.lng) {
+                updateUnit({
+                    id: id,
+                    name: existingName,
+                    lat: unitData.lat,
+                    lng: unitData.lng,
+                    status: existingStatus,
+                    timestamp: unitData.timestamp
+                });
+            }
+        });
+
+        // Aktualizuj zgłoszenia
+        reports = reportsData;
+        renderReports();
+        
+        // Aktualizuj znaczniki zgłoszeń
+        reports.forEach(report => {
+            if (!markersReports[report.id]) {
+                const circle = L.circleMarker([report.lat, report.lng], reportCircleStyles[report.tier])
+                    .addTo(map)
+                    .bindPopup(`
+                        <b>Zgłoszenie #${report.id}</b><br>
+                        <b>Tier:</b> ${report.tier}<br>
+                        <b>Opis:</b> ${report.description}<br>
+                        <b>Kontakt:</b> ${report.contact}<br>
+                        <b>Status:</b> ${report.status}
+                        ${report.assignedUnit ? `<br><b>Przispisana jednostka:</b> ${report.assignedUnit}` : ''}
+                        <br><button onclick="deleteReport('${report.id}')">Usuń zgłoszenie</button>
+                    `);
+                
+                markersReports[report.id] = circle;
+            }
+        });
+
+    } catch (error) {
+        console.error('Błąd pobierania danych:', error);
+    }
+}
+
 // --- Obsługa przycisku tworzenia zgłoszenia ---
 document.getElementById('createReport').addEventListener('click', () => {
     const tier = document.getElementById('tier').value;
@@ -393,115 +595,14 @@ document.getElementById('changeCallsignBtn').addEventListener('click', () => {
     document.getElementById('newCallsignInput').value = '';
 });
 
-// --- Pobieranie pozycji z serwera ---
-async function fetchPositions() {
-    try {
-        const response = await fetch(`${SERVER_URL}/positions`);
-        const data = await response.json();
-        
-        // Aktualizuj jednostki na podstawie danych z serwera
-        Object.entries(data).forEach(([id, unitData]) => {
-            // Zachowaj istniejący status jeśli jednostka już istnieje
-            const existingStatus = units[id]?.status || 'available';
-            const existingName = units[id]?.name || id; // Zachowaj istniejący callsign
-            
-            if (!units[id] || units[id].lat !== unitData.lat || units[id].lng !== unitData.lng) {
-                updateUnit({
-                    id: id,
-                    name: existingName,
-                    lat: unitData.lat,
-                    lng: unitData.lng,
-                    status: existingStatus,
-                    timestamp: unitData.timestamp
-                });
-            }
-        });
-    } catch (error) {
-        console.error('Błąd pobierania pozycji:', error);
-    }
-}
-
-// --- Pobieranie zgłoszeń z serwera ---
-async function fetchReports() {
-    try {
-        const response = await fetch(`${SERVER_URL}/reports`);
-        const data = await response.json();
-        
-        // Usuń stare znaczniki
-        Object.values(markersReports).forEach(marker => map.removeLayer(marker));
-        markersReports = {};
-        
-        // Aktualizuj listę zgłoszeń
-        reports = data;
-        
-        // Dodaj nowe znaczniki
-        reports.forEach(report => {
-            const circle = L.circleMarker([report.lat, report.lng], reportCircleStyles[report.tier])
-                .addTo(map)
-                .bindPopup(`
-                    <b>Zgłoszenie #${report.id}</b><br>
-                    <b>Tier:</b> ${report.tier}<br>
-                    <b>Opis:</b> ${report.description}<br>
-                    <b>Kontakt:</b> ${report.contact}<br>
-                    <b>Status:</b> ${report.status}
-                    ${report.assignedUnit ? `<br><b>Przypisana jednostka:</b> ${report.assignedUnit}` : ''}
-                    <br><button onclick="deleteReport('${report.id}')">Usuń zgłoszenie</button>
-                `);
-            
-            markersReports[report.id] = circle;
-        });
-        
-        renderReports();
-    } catch (error) {
-        console.error('Błąd pobierania zgłoszeń:', error);
-    }
-}
-
-// --- Pobieranie jednostek z serwera ---
-async function fetchUnits() {
-    try {
-        const response = await fetch(`${SERVER_URL}/units`);
-        const data = await response.json();
-        
-        // Usuń stare znaczniki
-        Object.values(markersUnits).forEach(marker => map.removeLayer(marker));
-        markersUnits = {};
-        
-        // Aktualizuj listę jednostek
-        units = data;
-        
-        // Dodaj nowe znaczniki
-        Object.entries(units).forEach(([id, unitData]) => {
-            const circle = L.circleMarker([unitData.lat, unitData.lng], unitCircleStyles[unitData.status] || unitCircleStyles.available)
-                .addTo(map)
-                .bindPopup(`
-                    <b>${unitData.name} (${id})</b><br>
-                    Status: ${unitData.status}<br>
-                    Ostatnia aktualizacja: ${new Date(unitData.timestamp || Date.now()).toLocaleTimeString()}
-                `);
-            
-            markersUnits[id] = circle;
-        });
-        
-        renderUnits();
-    } catch (error) {
-        console.error('Błąd pobierania jednostek:', error);
-    }
-}
-
 // Regularne pobieranie danych co 5 sekund
-setInterval(() => {
-    fetchPositions();
-    fetchReports();
-    fetchUnits();
-}, 5000);
+setInterval(fetchData, 5000);
 
 // Inicjalizacja przy starcie
-setTimeout(() => {
-    fetchPositions();
-    fetchReports();
-    fetchUnits();
-}, 1000);
+document.addEventListener('DOMContentLoaded', () => {
+    console.log('Aplikacja inicjalizowana...');
+    fetchData();
+});
 </script>
 </body>
 </html>
