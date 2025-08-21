@@ -4,120 +4,172 @@ const path = require('path');
 const fs = require('fs').promises;
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
-// Middleware
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// Serwowanie statycznych plików (frontend)
-app.use(express.static(path.join(__dirname)));
-
-// Pliki danych
-const DATA_DIR = path.join(__dirname, 'data');
+// --- Ścieżki do folderu persistent disk ---
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const OFFICERS_FILE = path.join(DATA_DIR, 'officers.json');
 const REPORTS_FILE = path.join(DATA_DIR, 'reports.json');
 const UNITS_FILE = path.join(DATA_DIR, 'units.json');
 
-// Funkcje do pracy z plikami JSON
+// --- Middleware ---
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type']
+}));
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname)));
+
+// --- Funkcje do obsługi danych ---
 async function ensureDataDir() {
-  try { await fs.access(DATA_DIR); } 
-  catch { await fs.mkdir(DATA_DIR, { recursive: true }); }
+  try {
+    await fs.access(DATA_DIR);
+  } catch {
+    await fs.mkdir(DATA_DIR, { recursive: true });
+  }
 }
 
-async function loadData(file, defaultData) {
+async function loadData(filename, defaultData = {}) {
   try {
     await ensureDataDir();
-    const data = await fs.readFile(file, 'utf8');
+    const data = await fs.readFile(filename, 'utf8');
     return JSON.parse(data);
   } catch {
-    await saveData(file, defaultData);
+    console.log(`Tworzenie nowego pliku ${filename} z domyślnymi danymi`);
+    await saveData(filename, defaultData);
     return defaultData;
   }
 }
 
-async function saveData(file, data) {
-  await ensureDataDir();
-  await fs.writeFile(file, JSON.stringify(data, null, 2));
+async function saveData(filename, data) {
+  try {
+    await ensureDataDir();
+    await fs.writeFile(filename, JSON.stringify(data, null, 2));
+  } catch (error) {
+    console.error(`Błąd zapisu do ${filename}:`, error);
+  }
 }
 
-// Dane w pamięci
+// --- Inicjalizacja danych ---
 let officers = {};
 let reports = [];
 let units = {};
 
-async function initData() {
+async function initializeData() {
   officers = await loadData(OFFICERS_FILE, {});
   reports = await loadData(REPORTS_FILE, []);
   units = await loadData(UNITS_FILE, {});
 }
 
-initData();
+initializeData();
+
+// --- Strona główna ---
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+app.get('/favicon.ico', (req, res) => res.status(204).end());
 
 // --- Endpointy ---
-
-// GET homepage
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
-
-// GET /positions
-app.get('/positions', (req, res) => res.json(officers));
-
-// POST /update
+// Aktualizacja pozycji funkcjonariusza
 app.post('/update', async (req, res) => {
   const { location, device_id } = req.body;
-  if (!location || !location.coords || !device_id)
-    return res.status(400).json({ error: 'Brak danych' });
 
-  officers[device_id] = {
-    name: officers[device_id]?.name || device_id,
-    lat: parseFloat(location.coords.latitude),
-    lng: parseFloat(location.coords.longitude),
-    timestamp: location.timestamp || Date.now()
+  if (!location || !location.coords || !device_id) {
+    return res.status(400).json({ status: 'error', message: 'Brak danych lub współrzędnych' });
+  }
+
+  const lat = parseFloat(location.coords.latitude);
+  const lng = parseFloat(location.coords.longitude);
+  const timestamp = location.timestamp ? new Date(location.timestamp).getTime() : Date.now();
+
+  officers[device_id] = { 
+    name: officers[device_id]?.name || device_id, 
+    lat, 
+    lng, 
+    timestamp 
   };
-
+  
   await saveData(OFFICERS_FILE, officers);
-  res.json({ status: 'ok', officer: officers[device_id] });
+  res.json({ status: 'ok', data: officers[device_id] });
 });
 
-// GET /reports
-app.get('/reports', (req, res) => res.json(reports));
+// Pobranie wszystkich pozycji
+app.get('/positions', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.json(officers);
+});
 
-// POST /reports
+// Zarządzanie zgłoszeniami
+app.get('/reports', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.json(reports);
+});
+
 app.post('/reports', async (req, res) => {
-  const report = req.body;
-  reports.push(report);
-  await saveData(REPORTS_FILE, reports);
-  res.json({ status: 'ok', report });
+  try {
+    const newReport = req.body;
+    reports.push(newReport);
+    await saveData(REPORTS_FILE, reports);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.json({ status: 'ok', report: newReport });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
 });
 
-// PUT /reports/:id
 app.put('/reports/:id', async (req, res) => {
-  const idx = reports.findIndex(r => r.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: 'Nie znaleziono' });
+  try {
+    const reportId = req.params.id;
+    const updatedReport = req.body;
+    const index = reports.findIndex(r => r.id === reportId);
 
-  reports[idx] = req.body;
-  await saveData(REPORTS_FILE, reports);
-  res.json({ status: 'ok', report: reports[idx] });
+    if (index === -1) {
+      return res.status(404).json({ status: 'error', message: 'Zgłoszenie nie znalezione' });
+    }
+
+    reports[index] = updatedReport;
+    await saveData(REPORTS_FILE, reports);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.json({ status: 'ok', report: updatedReport });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
 });
 
-// DELETE /reports/:id
 app.delete('/reports/:id', async (req, res) => {
-  reports = reports.filter(r => r.id !== req.params.id);
-  await saveData(REPORTS_FILE, reports);
-  res.json({ status: 'ok' });
+  try {
+    const reportId = req.params.id;
+    reports = reports.filter(r => r.id !== reportId);
+    await saveData(REPORTS_FILE, reports);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.json({ status: 'ok', message: 'Zgłoszenie usunięte' });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
 });
 
-// GET /units
-app.get('/units', (req, res) => res.json(units));
+// Zarządzanie jednostkami
+app.get('/units', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.json(units);
+});
 
-// PUT /units/:id
 app.put('/units/:id', async (req, res) => {
-  const id = req.params.id;
-  units[id] = req.body;
-  await saveData(UNITS_FILE, units);
-  res.json({ status: 'ok', unit: units[id] });
+  try {
+    const unitId = req.params.id;
+    const updatedUnit = req.body;
+    units[unitId] = updatedUnit;
+    await saveData(UNITS_FILE, units);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.json({ status: 'ok', unit: updatedUnit });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
 });
 
-// Start serwera
+// --- Start serwera ---
 app.listen(PORT, () => console.log(`API działa na porcie ${PORT}`));
