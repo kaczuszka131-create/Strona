@@ -417,6 +417,27 @@ document.getElementById('changeCallsignBtn').addEventListener('click', () => {
     document.getElementById('newCallsignInput').value = '';
 });
 
+function fetchReports() {
+    fetch(`${SERVER_URL}/reports`)
+        .then(res => res.json())
+        .then(data => {
+            reports = data; // nadpisz lokalną listę zgłoszeń danymi z serwera
+            // Usuń wszystkie markery z mapy
+            Object.values(markersReports).forEach(m => map.removeLayer(m));
+            markersReports = {};
+            // Dodaj markery od nowa
+            reports.forEach(addReport);
+        })
+        .catch(console.error);
+}
+
+fetch(`${SERVER_URL}/reports/${reportId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ assignedUnit: unitId })
+})
+.then(() => fetchReports());
+
 // --- Pobieranie pozycji z serwera ---
 function fetchPositions() {
     fetch(`${SERVER_URL}/positions`)
@@ -462,3 +483,4 @@ setTimeout(() => {
 </body>
 
 </html>
+
