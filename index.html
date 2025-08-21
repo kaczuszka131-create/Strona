@@ -75,6 +75,27 @@
         color: #666;
         font-style: italic;
     }
+    .error {
+        color: red;
+        font-weight: bold;
+    }
+    .connection-status {
+        position: fixed;
+        bottom: 10px;
+        right: 10px;
+        padding: 5px 10px;
+        border-radius: 5px;
+        font-size: 12px;
+        z-index: 1000;
+    }
+    .connection-online {
+        background-color: #d4edda;
+        color: #155724;
+    }
+    .connection-offline {
+        background-color: #f8d7da;
+        color: #721c24;
+    }
 </style>
 </head>
 <body>
@@ -120,9 +141,18 @@
     </div>
 </div>
 
+<div id="connectionStatus" class="connection-status connection-offline">Brak połączenia z serwerem</div>
+
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script>
-const SERVER_URL = 'https://dyspo.onrender.com';
+// Konfiguracja serwera - jeśli główny serwer nie działa, używamy mock danych
+const SERVER_CONFIG = {
+    primary: 'https://dyspo.onrender.com',
+    fallbackToMock: true // czy używać mock danych gdy serwer nie odpowiada
+};
+
+let SERVER_URL = SERVER_CONFIG.primary;
+let usingMockData = false;
 const map = L.map('map').setView([52.0, 19.0], 6);
 
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -150,6 +180,57 @@ const reportCircleStyles = {
     3: { color: 'red', fillColor: '#ff0000', fillOpacity: 0.7, radius: 12 }
 };
 
+// Mock danych dla trybu offline
+const mockUnits = {
+    'unit1': { id: 'unit1', name: 'R-01', lat: 52.2297, lng: 21.0122, status: 'available', timestamp: Date.now() },
+    'unit2': { id: 'unit2', name: 'R-02', lat: 52.4064, lng: 16.9252, status: 'available', timestamp: Date.now() },
+    'unit3': { id: 'unit3', name: 'R-03', lat: 51.1079, lng: 17.0385, status: 'unavailable', timestamp: Date.now() }
+};
+
+const mockReports = [
+    { id: '001', tier: '2', description: 'Awaria sygnalizacji świetlnej', contact: '123-456-789', status: 'Otwarty', lat: 52.2297, lng: 21.0122, timestamp: Date.now() - 3600000 },
+    { id: '002', tier: '1', description: 'Uszkodzona ławka w parku', contact: '987-654-321', status: 'W trakcie', lat: 52.4064, lng: 16.9252, timestamp: Date.now() - 1800000, assignedUnit: 'unit2' }
+];
+
+// --- Aktualizacja statusu połączenia ---
+function updateConnectionStatus(isOnline) {
+    const statusElement = document.getElementById('connectionStatus');
+    if (isOnline) {
+        statusElement.textContent = 'Połączono z serwerem';
+        statusElement.className = 'connection-status connection-online';
+    } else {
+        statusElement.textContent = 'Brak połączenia z serwerem - tryb offline';
+        statusElement.className = 'connection-status connection-offline';
+    }
+}
+
+// --- Sprawdzenie czy serwer jest dostępny ---
+async function checkServerStatus() {
+    try {
+        const response = await fetch(`${SERVER_URL}/health`, {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            timeout: 5000
+        });
+        
+        if (response.ok) {
+            updateConnectionStatus(true);
+            usingMockData = false;
+            return true;
+        }
+    } catch (error) {
+        console.warn('Serwer niedostępny, używam mock danych', error);
+        if (SERVER_CONFIG.fallbackToMock) {
+            usingMockData = true;
+            updateConnectionStatus(false);
+            return false;
+        }
+    }
+    return false;
+}
+
 // --- Kliknięcie na mapie ustawia lokalizację zgłoszenia ---
 map.on('click', (e) => {
     selectedLatLng = e.latlng;
@@ -158,7 +239,18 @@ map.on('click', (e) => {
 
 // --- Dodawanie zgłoszenia ---
 function addReport(report) {
-    reports.push(report);
+    // Sprawdź czy zgłoszenie już istnieje
+    const existingIndex = reports.findIndex(r => r.id === report.id);
+    if (existingIndex >= 0) {
+        reports[existingIndex] = report;
+    } else {
+        reports.push(report);
+    }
+    
+    // Aktualizuj marker na mapie
+    if (markersReports[report.id]) {
+        map.removeLayer(markersReports[report.id]);
+    }
     
     // Koło dla zgłoszenia z odpowiednim kolorem
     const circle = L.circleMarker([report.lat, report.lng], reportCircleStyles[report.tier])
@@ -181,27 +273,36 @@ function addReport(report) {
 async function deleteReport(reportId) {
     if (confirm('Czy na pewno chcesz usunąć to zgłoszenie?')) {
         try {
-            // Usuń zgłoszenie z serwera
-            const response = await fetch(`${SERVER_URL}/reports/${reportId}`, {
-                method: 'DELETE'
-            });
-            
-            if (response.ok) {
-                // Usuń znacznik z mapy
-                if (markersReports[reportId]) {
-                    map.removeLayer(markersReports[reportId]);
-                    delete markersReports[reportId];
-                }
+            if (!usingMockData) {
+                // Usuń zgłoszenie z serwera
+                const response = await fetch(`${SERVER_URL}/reports/${reportId}`, {
+                    method: 'DELETE'
+                });
                 
-                // Usuń zgłoszenie z listy
-                reports = reports.filter(report => report.id !== reportId);
-                renderReports();
-            } else {
-                alert('Błąd podczas usuwania zgłoszenia z serwera');
+                if (!response.ok) {
+                    throw new Error('Błąd serwera');
+                }
             }
+            
+            // Usuń znacznik z mapy
+            if (markersReports[reportId]) {
+                map.removeLayer(markersReports[reportId]);
+                delete markersReports[reportId];
+            }
+            
+            // Usuń zgłoszenie z listy
+            reports = reports.filter(report => report.id !== reportId);
+            renderReports();
         } catch (error) {
-            console.error('Błąd usuwania zgłoszenia:', error);
-            alert('Błąd podczas usuwania zgłoszenia');
+            console.error('Błąd podczas usuwania zgłoszenia:', error);
+            // Nawet jeśli serwer nie odpowiedział, usuwamy lokalnie
+            if (markersReports[reportId]) {
+                map.removeLayer(markersReports[reportId]);
+                delete markersReports[reportId];
+            }
+            reports = reports.filter(report => report.id !== reportId);
+            renderReports();
+            alert('Zgłoszenie usunięte lokalnie, ale wystąpił problem z synchronizacją z serwerem.');
         }
     }
 }
@@ -250,7 +351,9 @@ function renderReports() {
         
         div.onclick = () => {
             map.setView([report.lat, report.lng], 16);
-            markersReports[report.id].openPopup();
+            if (markersReports[report.id]) {
+                markersReports[report.id].openPopup();
+            }
         };
         
         container.appendChild(div);
@@ -323,7 +426,9 @@ function renderUnits() {
         
         div.onclick = () => {
             map.setView([unit.lat, unit.lng], 16);
-            markersUnits[unit.id].openPopup();
+            if (markersUnits[unit.id]) {
+                markersUnits[unit.id].openPopup();
+            }
         };
         
         container.appendChild(div);
@@ -334,25 +439,30 @@ function renderUnits() {
 async function changeUnitStatus(unitId, newStatus) {
     if (units[unitId]) {
         try {
-            // Aktualizuj status na serwerze
-            const response = await fetch(`${SERVER_URL}/units/${unitId}`, {
-                method: 'PATCH',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ status: newStatus })
-            });
-            
-            if (response.ok) {
-                // Aktualizuj lokalnie po potwierdzeniu z serwera
-                units[unitId].status = newStatus;
-                updateUnit(units[unitId]);
-            } else {
-                alert('Błąd podczas aktualizacji statusu jednostki na serwerze');
+            if (!usingMockData) {
+                // Aktualizuj status na serwerze
+                const response = await fetch(`${SERVER_URL}/units/${unitId}`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ status: newStatus })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Błąd serwera');
+                }
             }
+            
+            // Aktualizuj lokalnie po potwierdzeniu z serwera
+            units[unitId].status = newStatus;
+            updateUnit(units[unitId]);
         } catch (error) {
             console.error('Błąd aktualizacji statusu jednostki:', error);
-            alert('Błąd podczas aktualizacji statusu jednostki');
+            // Aktualizuj lokalnie nawet jeśli serwer nie odpowiedział
+            units[unitId].status = newStatus;
+            updateUnit(units[unitId]);
+            alert('Status zmieniony lokalnie, ale wystąpił problem z synchronizacją z serwerem.');
         }
     }
 }
@@ -361,26 +471,31 @@ async function changeUnitStatus(unitId, newStatus) {
 async function changeUnitCallsign(unitId, newCallsign) {
     if (units[unitId]) {
         try {
-            // Aktualizuj callsign na serwerze
-            const response = await fetch(`${SERVER_URL}/units/${unitId}`, {
-                method: 'PATCH',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ name: newCallsign })
-            });
-            
-            if (response.ok) {
-                // Aktualizuj lokalnie po potwierdzeniu z serwera
-                units[unitId].name = newCallsign;
-                updateUnit(units[unitId]);
-                alert(`Callsign jednostki ${unitId} zmieniony na: ${newCallsign}`);
-            } else {
-                alert('Błąd podczas zmiany callsignu na serwerze');
+            if (!usingMockData) {
+                // Aktualizuj callsign na serwerze
+                const response = await fetch(`${SERVER_URL}/units/${unitId}`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ name: newCallsign })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Błąd serwera');
+                }
             }
+            
+            // Aktualizuj lokalnie po potwierdzeniu z serwera
+            units[unitId].name = newCallsign;
+            updateUnit(units[unitId]);
+            alert(`Callsign jednostki ${unitId} zmieniony na: ${newCallsign}`);
         } catch (error) {
             console.error('Błąd zmiany callsignu:', error);
-            alert('Błąd podczas zmiany callsignu');
+            // Aktualizuj lokalnie nawet jeśli serwer nie odpowiedział
+            units[unitId].name = newCallsign;
+            updateUnit(units[unitId]);
+            alert('Callsign zmieniony lokalnie, ale wystąpił problem z synchronizacją z serwerem.');
         }
     } else {
         alert(`Jednostka o ID ${unitId} nie istnieje!`);
@@ -413,30 +528,54 @@ async function assignUnitToReport(reportId) {
     
     if (unitToAssign) {
         try {
-            // Aktualizuj zgłoszenie na serwerze
-            const response = await fetch(`${SERVER_URL}/reports/${reportId}`, {
-                method: 'PATCH',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ assignedUnit: unitToAssign.id })
-            });
-            
-            if (response.ok) {
-                // Aktualizuj lokalnie po potwierdzeniu z serwera
-                const report = reports.find(r => r.id === reportId);
-                if (report) {
-                    report.assignedUnit = unitToAssign.id;
-                    // Zmień status jednostki na "na interwencji"
-                    await changeUnitStatus(unitToAssign.id, 'on-intervention');
-                    renderReports();
+            if (!usingMockData) {
+                // Aktualizuj zgłoszenie na serwerze
+                const reportResponse = await fetch(`${SERVER_URL}/reports/${reportId}`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ assignedUnit: unitToAssign.id })
+                });
+                
+                if (!reportResponse.ok) {
+                    throw new Error('Błąd serwera przy aktualizacji zgłoszenia');
                 }
-            } else {
-                alert('Błąd podczas przypisywania jednostki do zgłoszenia na serwerze');
+                
+                // Aktualizuj status jednostki na serwerze
+                const unitResponse = await fetch(`${SERVER_URL}/units/${unitToAssign.id}`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ status: 'on-intervention' })
+                });
+                
+                if (!unitResponse.ok) {
+                    throw new Error('Błąd serwera przy aktualizacji jednostki');
+                }
+            }
+            
+            // Aktualizuj lokalnie po potwierdzeniu z serwera
+            const report = reports.find(r => r.id === reportId);
+            if (report) {
+                report.assignedUnit = unitToAssign.id;
+                // Zmień status jednostki na "na interwencji"
+                units[unitToAssign.id].status = 'on-intervention';
+                updateUnit(units[unitToAssign.id]);
+                renderReports();
             }
         } catch (error) {
             console.error('Błąd przypisywania jednostki:', error);
-            alert('Błąd podczas przypisywania jednostki do zgłoszenia');
+            // Aktualizuj lokalnie nawet jeśli serwer nie odpowiedział
+            const report = reports.find(r => r.id === reportId);
+            if (report) {
+                report.assignedUnit = unitToAssign.id;
+                units[unitToAssign.id].status = 'on-intervention';
+                updateUnit(units[unitToAssign.id]);
+                renderReports();
+                alert('Jednostka przypisana lokalnie, ale wystąpił problem z synchronizacją z serwerem.');
+            }
         }
     } else {
         alert(`Nie znaleziono jednostki o ID/callsign: ${userInput}`);
@@ -448,28 +587,50 @@ async function releaseUnitFromReport(reportId) {
     const report = reports.find(r => r.id === reportId);
     if (report && report.assignedUnit) {
         try {
-            // Aktualizuj zgłoszenie na serwerze
-            const response = await fetch(`${SERVER_URL}/reports/${reportId}`, {
-                method: 'PATCH',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ assignedUnit: null })
-            });
-            
-            if (response.ok) {
-                // Aktualizuj lokalnie po potwierdzeniu z serwera
-                const unitId = report.assignedUnit;
-                report.assignedUnit = null;
-                // Zmień status jednostki na "dostępny"
-                await changeUnitStatus(unitId, 'available');
-                renderReports();
-            } else {
-                alert('Błąd podczas zwalniania jednostki ze zgłoszenia na serwerze');
+            if (!usingMockData) {
+                // Aktualizuj zgłoszenie na serwerze
+                const reportResponse = await fetch(`${SERVER_URL}/reports/${reportId}`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ assignedUnit: null })
+                });
+                
+                if (!reportResponse.ok) {
+                    throw new Error('Błąd serwera przy aktualizacji zgłoszenia');
+                }
+                
+                // Aktualizuj status jednostki na serwerze
+                const unitResponse = await fetch(`${SERVER_URL}/units/${report.assignedUnit}`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ status: 'available' })
+                });
+                
+                if (!unitResponse.ok) {
+                    throw new Error('Błąd serwera przy aktualizacji jednostki');
+                }
             }
+            
+            // Aktualizuj lokalnie po potwierdzeniu z serwera
+            const unitId = report.assignedUnit;
+            report.assignedUnit = null;
+            // Zmień status jednostki na "dostępny"
+            units[unitId].status = 'available';
+            updateUnit(units[unitId]);
+            renderReports();
         } catch (error) {
             console.error('Błąd zwalniania jednostki:', error);
-            alert('Błąd podczas zwalniania jednostki ze zgłoszenia');
+            // Aktualizuj lokalnie nawet jeśli serwer nie odpowiedział
+            const unitId = report.assignedUnit;
+            report.assignedUnit = null;
+            units[unitId].status = 'available';
+            updateUnit(units[unitId]);
+            renderReports();
+            alert('Jednostka zwolniona lokalnie, ale wystąpił problem z synchronizacją z serwerem.');
         }
     }
 }
@@ -485,39 +646,59 @@ document.getElementById('createReport').addEventListener('click', async () => {
     if (!description) return alert('Podaj opis zgłoszenia!');
 
     try {
-        // Wyślij zgłoszenie na serwer
-        const response = await fetch(`${SERVER_URL}/reports`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                tier,
-                description,
-                contact,
+        let newReport;
+        
+        if (!usingMockData) {
+            // Wyślij zgłoszenie na serwer
+            const response = await fetch(`${SERVER_URL}/reports`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    tier,
+                    description,
+                    contact,
+                    status,
+                    lat: selectedLatLng.lat,
+                    lng: selectedLatLng.lng
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error('Błąd serwera');
+            }
+            
+            newReport = await response.json();
+        } else {
+            // Tryb offline - generuj lokalne ID
+            const nextId = reports.length > 0 
+                ? Math.max(...reports.map(r => parseInt(r.id))) + 1 
+                : 1;
+            
+            newReport = {
+                id: nextId.toString().padStart(3, '0'),
+                tier, 
+                description, 
+                contact, 
                 status,
                 lat: selectedLatLng.lat,
-                lng: selectedLatLng.lng
-            })
-        });
-        
-        if (response.ok) {
-            const newReport = await response.json();
-            
-            // Dodaj zgłoszenie do lokalnej listy
-            addReport(newReport);
-
-            // Reset
-            document.getElementById('description').value = '';
-            document.getElementById('contact').value = '';
-            selectedLatLng = null;
-            document.getElementById('coordsDisplay').innerText = 'Nie wybrano lokalizacji';
-        } else {
-            alert('Błąd podczas tworzenia zgłoszenia na serwerze');
+                lng: selectedLatLng.lng,
+                timestamp: Date.now()
+            };
         }
+        
+        // Dodaj zgłoszenie do lokalnej listy
+        addReport(newReport);
+
+        // Reset
+        document.getElementById('description').value = '';
+        document.getElementById('contact').value = '';
+        selectedLatLng = null;
+        document.getElementById('coordsDisplay').innerText = 'Nie wybrano lokalizacji';
     } catch (error) {
         console.error('Błąd tworzenia zgłoszenia:', error);
-        alert('Błąd podczas tworzenia zgłoszenia');
+        alert('Błąd podczas tworzenia zgłoszenia. Sprawdź połączenie z serwerem.');
     }
 });
 
@@ -539,10 +720,17 @@ document.getElementById('changeCallsignBtn').addEventListener('click', () => {
 // --- Pobieranie zgłoszeń z serwera ---
 async function fetchReports() {
     try {
+        if (usingMockData) {
+            // Użyj mock danych
+            reports = [...mockReports];
+            reports.forEach(addReport);
+            return;
+        }
+        
         const response = await fetch(`${SERVER_URL}/reports`);
         if (response.ok) {
             const data = await response.json();
-            reports = data; // nadpisz lokalną listę zgłoszeń danymi z serwera
+            reports = data;
             
             // Usuń wszystkie markery z mapy
             Object.values(markersReports).forEach(m => map.removeLayer(m));
@@ -551,16 +739,28 @@ async function fetchReports() {
             // Dodaj markery od nowa
             reports.forEach(addReport);
         } else {
-            console.error('Błąd pobierania zgłoszeń');
+            throw new Error('Błąd odpowiedzi serwera');
         }
     } catch (error) {
         console.error('Błąd pobierania zgłoszeń:', error);
+        if (SERVER_CONFIG.fallbackToMock) {
+            usingMockData = true;
+            updateConnectionStatus(false);
+            reports = [...mockReports];
+            reports.forEach(addReport);
+        }
     }
 }
 
 // --- Pobieranie jednostek z serwera ---
 async function fetchUnits() {
     try {
+        if (usingMockData) {
+            // Użyj mock danych
+            Object.values(mockUnits).forEach(unit => updateUnit(unit));
+            return;
+        }
+        
         const response = await fetch(`${SERVER_URL}/units`);
         if (response.ok) {
             const data = await response.json();
@@ -577,16 +777,33 @@ async function fetchUnits() {
                 });
             });
         } else {
-            console.error('Błąd pobierania jednostek');
+            throw new Error('Błąd odpowiedzi serwera');
         }
     } catch (error) {
         console.error('Błąd pobierania jednostek:', error);
+        if (SERVER_CONFIG.fallbackToMock) {
+            usingMockData = true;
+            updateConnectionStatus(false);
+            Object.values(mockUnits).forEach(unit => updateUnit(unit));
+        }
     }
 }
 
 // --- Pobieranie pozycji z serwera ---
 async function fetchPositions() {
     try {
+        if (usingMockData) {
+            // W trybie mock symuluj ruch jednostek
+            Object.values(units).forEach(unit => {
+                // Losowa niewielka zmiana pozycji dla realizmu
+                unit.lat += (Math.random() - 0.5) * 0.001;
+                unit.lng += (Math.random() - 0.5) * 0.001;
+                unit.timestamp = Date.now();
+                updateUnit(unit);
+            });
+            return;
+        }
+        
         const response = await fetch(`${SERVER_URL}/positions`);
         if (response.ok) {
             const data = await response.json();
@@ -616,24 +833,34 @@ async function fetchPositions() {
                 }
             });
         } else {
-            console.error('Błąd pobierania pozycji');
+            throw new Error('Błąd odpowiedzi serwera');
         }
     } catch (error) {
         console.error('Błąd pobierania pozycji:', error);
+        if (SERVER_CONFIG.fallbackToMock) {
+            usingMockData = true;
+            updateConnectionStatus(false);
+        }
     }
 }
 
 // Funkcja do okresowego odświeżania danych
 function startDataRefresh() {
-    // Pobierz dane przy starcie
-    fetchReports();
-    fetchUnits();
-    fetchPositions();
+    // Sprawdź status serwera
+    checkServerStatus().then(isOnline => {
+        if (isOnline) {
+            // Pobierz dane przy starcie
+            fetchReports();
+            fetchUnits();
+            fetchPositions();
+        }
+    });
     
     // Ustaw okresowe odświeżanie
-    setInterval(fetchReports, 5000);
-    setInterval(fetchUnits, 5000);
-    setInterval(fetchPositions, 3000);
+    setInterval(fetchReports, 10000);
+    setInterval(fetchUnits, 10000);
+    setInterval(fetchPositions, 5000);
+    setInterval(checkServerStatus, 30000); // Sprawdzaj status serwera co 30 sekund
 }
 
 // Inicjalizacja przy starcie
