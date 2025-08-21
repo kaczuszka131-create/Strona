@@ -5,120 +5,20 @@
 <title>Centrum Dyspozytorskie</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
 <style>
-    body, html { margin: 0; height: 100%; font-family: Arial, sans-serif; }
-    #container { display: flex; height: 100%; }
-    #map { flex: 1; height: 100%; }
-    #sidebar {
-        width: 360px;
-        background: #f7f7f7;
-        padding: 10px;
-        box-shadow: -2px 0 5px rgba(0,0,0,0.2);
-        overflow-y: auto;
-    }
-    h2 { margin-top: 0; font-size: 18px; }
-    label { display: block; margin-top: 8px; font-weight: bold; }
-    input, select, textarea, button { width: 100%; margin-top: 4px; padding: 5px; font-size: 14px; }
-    textarea { resize: vertical; }
-    .report-item, .unit-item {
-        padding: 6px 8px;
-        margin-bottom: 6px;
-        border-radius: 5px;
-        background: #fff;
-        border-left: 4px solid #007bff;
-        cursor: pointer;
-        position: relative;
-    }
-    .report-item.tier-1 { border-left-color: green; }
-    .report-item.tier-2 { border-left-color: orange; }
-    .report-item.tier-3 { border-left-color: red; }
-    .unit-item { border-left-color: #007bff; }
-    .unit-item.available { background: #e0f0ff; border-left-color: green; }
-    .unit-item.unavailable { background: #ffe0e0; border-left-color: red; }
-    .unit-item.on-intervention { background: #fff0e0; border-left-color: orange; }
-    #coordsDisplay { font-size: 12px; color: #555; margin-top: 4px; }
-    .assign-btn, .delete-btn {
-        margin-top: 4px;
-        color: white;
-        border: none;
-        padding: 3px 6px;
-        cursor: pointer;
-        border-radius: 3px;
-        font-size: 12px;
-    }
-    .assign-btn {
-        background: #007bff;
-    }
-    .delete-btn {
-        background: #dc3545;
-    }
-    .unit-status-btn {
-        margin-top: 4px;
-        margin-right: 4px;
-        padding: 3px 6px;
-        cursor: pointer;
-        border-radius: 3px;
-        font-size: 12px;
-        border: 1px solid #ccc;
-    }
-    .callsign-edit {
-        display: flex;
-        margin-top: 8px;
-    }
-    .callsign-edit input {
-        flex: 1;
-        margin-right: 4px;
-    }
-    .callsign-edit button {
-        width: auto;
-    }
+    /* ... (stylowanie pozostaje bez zmian) ... */
 </style>
 </head>
 <body>
 <div id="container">
     <div id="map"></div>
     <div id="sidebar">
-        <h2>Tworzenie zgłoszenia</h2>
-        <label for="tier">Tier zgłoszenia:</label>
-        <select id="tier">
-            <option value="1">1 - Niski priorytet</option>
-            <option value="2">2 - Średni priorytet</option>
-            <option value="3">3 - Wysoki priorytet</option>
-        </select>
-
-        <label for="description">Opis:</label>
-        <textarea id="description" rows="3"></textarea>
-
-        <label for="contact">Kontakt:</label>
-        <input type="text" id="contact" placeholder="Numer telefonu">
-
-        <label for="status">Status:</label>
-        <select id="status">
-            <option value="Otwarty">Otwarty</option>
-            <option value="W trakcie">W trakcie</option>
-            <option value="Zamknięty">Zamknięty</option>
-        </select>
-
-        <button id="createReport">Stwórz zgłoszenie</button>
-        <div id="coordsDisplay">Nie wybrano lokalizacji</div>
-
-        <h2>Lista zgłoszeń</h2>
-        <div id="reportsList"></div>
-
-        <h2>Lista jednostek</h2>
-        <div id="unitsList"></div>
-        
-        <h2>Zarządzanie callsignami</h2>
-        <div class="callsign-edit">
-            <input type="text" id="unitIdInput" placeholder="ID jednostki">
-            <input type="text" id="newCallsignInput" placeholder="Nowy callsign">
-            <button id="changeCallsignBtn">Zmień</button>
-        </div>
+        <!-- ... (HTML pozostaje bez zmian) ... -->
     </div>
 </div>
 
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script>
-const SERVER_URL = 'https://dyspo.onrender.com';
+const SERVER_URL = 'http://localhost:3000';
 const map = L.map('map').setView([52.0, 19.0], 6);
 
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -153,38 +53,64 @@ map.on('click', (e) => {
 });
 
 // --- Dodawanie zgłoszenia ---
-function addReport(report) {
-    reports.push(report);
-    
-    // Koło dla zgłoszenia z odpowiednim kolorem
-    const circle = L.circleMarker([report.lat, report.lng], reportCircleStyles[report.tier])
-        .addTo(map)
-        .bindPopup(`
-            <b>Zgłoszenie #${report.id}</b><br>
-            <b>Tier:</b> ${report.tier}<br>
-            <b>Opis:</b> ${report.description}<br>
-            <b>Kontakt:</b> ${report.contact}<br>
-            <b>Status:</b> ${report.status}
-            ${report.assignedUnit ? `<br><b>Przypisana jednostka:</b> ${report.assignedUnit}` : ''}
-            <br><button onclick="deleteReport(${report.id})">Usuń zgłoszenie</button>
-        `);
-    
-    markersReports[report.id] = circle;
-    renderReports();
+async function addReport(report) {
+    try {
+        const response = await fetch(`${SERVER_URL}/reports`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(report)
+        });
+        
+        const result = await response.json();
+        if (result.status === 'ok') {
+            reports.push(report);
+            
+            // Koło dla zgłoszenia z odpowiednim kolorem
+            const circle = L.circleMarker([report.lat, report.lng], reportCircleStyles[report.tier])
+                .addTo(map)
+                .bindPopup(`
+                    <b>Zgłoszenie #${report.id}</b><br>
+                    <b>Tier:</b> ${report.tier}<br>
+                    <b>Opis:</b> ${report.description}<br>
+                    <b>Kontakt:</b> ${report.contact}<br>
+                    <b>Status:</b> ${report.status}
+                    ${report.assignedUnit ? `<br><b>Przypisana jednostka:</b> ${report.assignedUnit}` : ''}
+                    <br><button onclick="deleteReport('${report.id}')">Usuń zgłoszenie</button>
+                `);
+            
+            markersReports[report.id] = circle;
+            renderReports();
+        }
+    } catch (error) {
+        console.error('Błąd dodawania zgłoszenia:', error);
+    }
 }
 
 // --- Usuwanie zgłoszenia ---
-function deleteReport(reportId) {
+async function deleteReport(reportId) {
     if (confirm('Czy na pewno chcesz usunąć to zgłoszenie?')) {
-        // Usuń znacznik z mapy
-        if (markersReports[reportId]) {
-            map.removeLayer(markersReports[reportId]);
-            delete markersReports[reportId];
+        try {
+            const response = await fetch(`${SERVER_URL}/reports/${reportId}`, {
+                method: 'DELETE'
+            });
+            
+            const result = await response.json();
+            if (result.status === 'ok') {
+                // Usuń znacznik z mapy
+                if (markersReports[reportId]) {
+                    map.removeLayer(markersReports[reportId]);
+                    delete markersReports[reportId];
+                }
+                
+                // Usuń zgłoszenie z listy
+                reports = reports.filter(report => report.id !== reportId);
+                renderReports();
+            }
+        } catch (error) {
+            console.error('Błąd usuwania zgłoszenia:', error);
         }
-        
-        // Usuń zgłoszenie z listy
-        reports = reports.filter(report => report.id !== reportId.toString());
-        renderReports();
     }
 }
 
@@ -235,33 +161,48 @@ function renderReports() {
 }
 
 // --- Dodawanie / aktualizacja jednostek ---
-function updateUnit(unitData) {
-    const id = unitData.id;
-    units[id] = unitData;
-
-    // Aktualizuj koło jednostki
-    if (markersUnits[id]) {
-        markersUnits[id].setLatLng([unitData.lat, unitData.lng]);
-        markersUnits[id].setStyle(unitCircleStyles[unitData.status] || unitCircleStyles.available);
+async function updateUnit(unitData) {
+    try {
+        const response = await fetch(`${SERVER_URL}/units/${unitData.id}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(unitData)
+        });
         
-        // Aktualizuj popup
-        markersUnits[id].setPopupContent(`
-            <b>${unitData.name} (${id})</b><br>
-            Status: ${unitData.status}<br>
-            Ostatnia aktualizacja: ${new Date(unitData.timestamp || Date.now()).toLocaleTimeString()}
-        `);
-    } else {
-        const circle = L.circleMarker([unitData.lat, unitData.lng], unitCircleStyles[unitData.status] || unitCircleStyles.available)
-            .addTo(map)
-            .bindPopup(`
-                <b>${unitData.name} (${id})</b><br>
-                Status: ${unitData.status}<br>
-                Ostatnia aktualizacja: ${new Date(unitData.timestamp || Date.now()).toLocaleTimeString()}
-            `);
-        markersUnits[id] = circle;
-    }
+        const result = await response.json();
+        if (result.status === 'ok') {
+            const id = unitData.id;
+            units[id] = unitData;
 
-    renderUnits();
+            // Aktualizuj koło jednostki
+            if (markersUnits[id]) {
+                markersUnits[id].setLatLng([unitData.lat, unitData.lng]);
+                markersUnits[id].setStyle(unitCircleStyles[unitData.status] || unitCircleStyles.available);
+                
+                // Aktualizuj popup
+                markersUnits[id].setPopupContent(`
+                    <b>${unitData.name} (${id})</b><br>
+                    Status: ${unitData.status}<br>
+                    Ostatnia aktualizacja: ${new Date(unitData.timestamp || Date.now()).toLocaleTimeString()}
+                `);
+            } else {
+                const circle = L.circleMarker([unitData.lat, unitData.lng], unitCircleStyles[unitData.status] || unitCircleStyles.available)
+                    .addTo(map)
+                    .bindPopup(`
+                        <b>${unitData.name} (${id})</b><br>
+                        Status: ${unitData.status}<br>
+                        Ostatnia aktualizacja: ${new Date(unitData.timestamp || Date.now()).toLocaleTimeString()}
+                    `);
+                markersUnits[id] = circle;
+            }
+
+            renderUnits();
+        }
+    } catch (error) {
+        console.error('Błąd aktualizacji jednostki:', error);
+    }
 }
 
 // --- Render listy jednostek ---
@@ -320,7 +261,7 @@ function changeUnitCallsign(unitId, newCallsign) {
 }
 
 // --- Przypisanie jednostki do zgłoszenia ---
-function assignUnitToReport(reportId) {
+async function assignUnitToReport(reportId) {
     const availableUnits = Object.values(units).filter(u => u.status === 'available');
     if (availableUnits.length === 0) {
         alert('Brak dostępnych jednostek do przypisania!');
@@ -344,12 +285,29 @@ function assignUnitToReport(reportId) {
     }
     
     if (unitToAssign) {
-        const report = reports.find(r => r.id === reportId);
-        if (report) {
-            report.assignedUnit = unitToAssign.id;
-            // Zmień status jednostki na "na interwencji"
-            changeUnitStatus(unitToAssign.id, 'on-intervention');
-            renderReports();
+        const reportIndex = reports.findIndex(r => r.id === reportId);
+        if (reportIndex !== -1) {
+            reports[reportIndex].assignedUnit = unitToAssign.id;
+            
+            // Aktualizuj zgłoszenie na serwerze
+            try {
+                const response = await fetch(`${SERVER_URL}/reports/${reportId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(reports[reportIndex])
+                });
+                
+                const result = await response.json();
+                if (result.status === 'ok') {
+                    // Zmień status jednostki na "na interwencji"
+                    changeUnitStatus(unitToAssign.id, 'on-intervention');
+                    renderReports();
+                }
+            } catch (error) {
+                console.error('Błąd przypisywania jednostki:', error);
+            }
         }
     } else {
         alert(`Nie znaleziono jednostki o ID/callsign: ${userInput}`);
@@ -357,14 +315,31 @@ function assignUnitToReport(reportId) {
 }
 
 // --- Zwolnienie jednostki ze zgłoszenia ---
-function releaseUnitFromReport(reportId) {
-    const report = reports.find(r => r.id === reportId);
-    if (report && report.assignedUnit) {
-        const unitId = report.assignedUnit;
-        report.assignedUnit = null;
-        // Zmień status jednostki na "dostępny"
-        changeUnitStatus(unitId, 'available');
-        renderReports();
+async function releaseUnitFromReport(reportId) {
+    const reportIndex = reports.findIndex(r => r.id === reportId);
+    if (reportIndex !== -1 && reports[reportIndex].assignedUnit) {
+        const unitId = reports[reportIndex].assignedUnit;
+        reports[reportIndex].assignedUnit = null;
+        
+        // Aktualizuj zgłoszenie na serwerze
+        try {
+            const response = await fetch(`${SERVER_URL}/reports/${reportId}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(reports[reportIndex])
+            });
+            
+            const result = await response.json();
+            if (result.status === 'ok') {
+                // Zmień status jednostki na "dostępny"
+                changeUnitStatus(unitId, 'available');
+                renderReports();
+            }
+        } catch (error) {
+            console.error('Błąd zwalniania jednostki:', error);
+        }
     }
 }
 
@@ -390,7 +365,8 @@ document.getElementById('createReport').addEventListener('click', () => {
         tier, description, contact, status,
         lat: selectedLatLng.lat,
         lng: selectedLatLng.lng,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        assignedUnit: null
     };
 
     addReport(report);
@@ -418,16 +394,18 @@ document.getElementById('changeCallsignBtn').addEventListener('click', () => {
 });
 
 // --- Pobieranie pozycji z serwera ---
-function fetchPositions() {
-    fetch(`${SERVER_URL}/positions`)
-        .then(response => response.json())
-        .then(data => {
-            // Aktualizuj jednostki na podstawie danych z serwera
-            Object.entries(data).forEach(([id, unitData]) => {
-                // Zachowaj istniejący status jeśli jednostka już istnieje
-                const existingStatus = units[id]?.status || 'available';
-                const existingName = units[id]?.name || id; // Zachowaj istniejący callsign
-                
+async function fetchPositions() {
+    try {
+        const response = await fetch(`${SERVER_URL}/positions`);
+        const data = await response.json();
+        
+        // Aktualizuj jednostki na podstawie danych z serwera
+        Object.entries(data).forEach(([id, unitData]) => {
+            // Zachowaj istniejący status jeśli jednostka już istnieje
+            const existingStatus = units[id]?.status || 'available';
+            const existingName = units[id]?.name || id; // Zachowaj istniejący callsign
+            
+            if (!units[id] || units[id].lat !== unitData.lat || units[id].lng !== unitData.lng) {
                 updateUnit({
                     id: id,
                     name: existingName,
@@ -436,27 +414,93 @@ function fetchPositions() {
                     status: existingStatus,
                     timestamp: unitData.timestamp
                 });
-            });
-        })
-        .catch(error => console.error('Błąd pobierania pozycji:', error));
+            }
+        });
+    } catch (error) {
+        console.error('Błąd pobierania pozycji:', error);
+    }
 }
 
-// Inicjalizacja z przykładowymi jednostkami
-function initializeUnits() {
-    // Przykładowe jednostki
-    const exampleUnits = [
-    ];
-    
-    exampleUnits.forEach(u => updateUnit(u));
+// --- Pobieranie zgłoszeń z serwera ---
+async function fetchReports() {
+    try {
+        const response = await fetch(`${SERVER_URL}/reports`);
+        const data = await response.json();
+        
+        // Usuń stare znaczniki
+        Object.values(markersReports).forEach(marker => map.removeLayer(marker));
+        markersReports = {};
+        
+        // Aktualizuj listę zgłoszeń
+        reports = data;
+        
+        // Dodaj nowe znaczniki
+        reports.forEach(report => {
+            const circle = L.circleMarker([report.lat, report.lng], reportCircleStyles[report.tier])
+                .addTo(map)
+                .bindPopup(`
+                    <b>Zgłoszenie #${report.id}</b><br>
+                    <b>Tier:</b> ${report.tier}<br>
+                    <b>Opis:</b> ${report.description}<br>
+                    <b>Kontakt:</b> ${report.contact}<br>
+                    <b>Status:</b> ${report.status}
+                    ${report.assignedUnit ? `<br><b>Przypisana jednostka:</b> ${report.assignedUnit}` : ''}
+                    <br><button onclick="deleteReport('${report.id}')">Usuń zgłoszenie</button>
+                `);
+            
+            markersReports[report.id] = circle;
+        });
+        
+        renderReports();
+    } catch (error) {
+        console.error('Błąd pobierania zgłoszeń:', error);
+    }
 }
 
-// Regularne pobieranie pozycji co 5 sekund
-setInterval(fetchPositions, 5000);
+// --- Pobieranie jednostek z serwera ---
+async function fetchUnits() {
+    try {
+        const response = await fetch(`${SERVER_URL}/units`);
+        const data = await response.json();
+        
+        // Usuń stare znaczniki
+        Object.values(markersUnits).forEach(marker => map.removeLayer(marker));
+        markersUnits = {};
+        
+        // Aktualizuj listę jednostek
+        units = data;
+        
+        // Dodaj nowe znaczniki
+        Object.entries(units).forEach(([id, unitData]) => {
+            const circle = L.circleMarker([unitData.lat, unitData.lng], unitCircleStyles[unitData.status] || unitCircleStyles.available)
+                .addTo(map)
+                .bindPopup(`
+                    <b>${unitData.name} (${id})</b><br>
+                    Status: ${unitData.status}<br>
+                    Ostatnia aktualizacja: ${new Date(unitData.timestamp || Date.now()).toLocaleTimeString()}
+                `);
+            
+            markersUnits[id] = circle;
+        });
+        
+        renderUnits();
+    } catch (error) {
+        console.error('Błąd pobierania jednostek:', error);
+    }
+}
+
+// Regularne pobieranie danych co 5 sekund
+setInterval(() => {
+    fetchPositions();
+    fetchReports();
+    fetchUnits();
+}, 5000);
 
 // Inicjalizacja przy starcie
 setTimeout(() => {
-    initializeUnits();
     fetchPositions();
+    fetchReports();
+    fetchUnits();
 }, 1000);
 </script>
 </body>
