@@ -4,23 +4,39 @@ const path = require('path');
 const fs = require('fs').promises;
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+// Konfiguracja CORS
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type']
+}));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serwowanie plików statycznych (index.html)
+// Serwowanie plików statycznych
 app.use(express.static(path.join(__dirname)));
 
 // Ścieżki do plików danych
-const OFFICERS_FILE = 'officers.json';
-const REPORTS_FILE = 'reports.json';
-const UNITS_FILE = 'units.json';
+const DATA_DIR = path.join(__dirname, 'data');
+const OFFICERS_FILE = path.join(DATA_DIR, 'officers.json');
+const REPORTS_FILE = path.join(DATA_DIR, 'reports.json');
+const UNITS_FILE = path.join(DATA_DIR, 'units.json');
 
 // Funkcje do zarządzania danymi
+async function ensureDataDir() {
+  try {
+    await fs.access(DATA_DIR);
+  } catch (error) {
+    await fs.mkdir(DATA_DIR, { recursive: true });
+  }
+}
+
 async function loadData(filename, defaultData = {}) {
   try {
+    await ensureDataDir();
     const data = await fs.readFile(filename, 'utf8');
     return JSON.parse(data);
   } catch (error) {
@@ -32,6 +48,7 @@ async function loadData(filename, defaultData = {}) {
 
 async function saveData(filename, data) {
   try {
+    await ensureDataDir();
     await fs.writeFile(filename, JSON.stringify(data, null, 2));
   } catch (error) {
     console.error(`Błąd zapisu do ${filename}:`, error);
@@ -52,18 +69,19 @@ async function initializeData() {
 initializeData();
 
 // Strona główna
-app.get('/', (req, res) => res.send("Serwer GPS działa! POST /update, GET /positions"));
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
+
 app.get('/favicon.ico', (req, res) => res.status(204).end());
 
 // Endpoint do aktualizacji pozycji
 app.post('/update', async (req, res) => {
-  console.log('--- NOWY POST /update ---');
-  console.log('Otrzymane body:', req.body);
+  console.log('Otrzymano POST /update:', req.body);
 
   const { location, device_id } = req.body;
 
   if (!location || !location.coords || !device_id) {
-    console.log('Brak danych lub współrzędnych!');
     return res.status(400).json({ status: 'error', message: 'Brak danych lub współrzędnych' });
   }
 
@@ -78,25 +96,30 @@ app.post('/update', async (req, res) => {
     timestamp 
   };
   
-  console.log(`Aktualizacja pozycji: ${device_id} -> lat:${lat}, lng:${lng}`);
-  
   // Zapisz dane do pliku
   await saveData(OFFICERS_FILE, officers);
 
-  res.json({ status: 'ok', data: officers[device_id], received: req.body });
+  res.json({ status: 'ok', data: officers[device_id] });
 });
 
 // Endpoint pobierania wszystkich pozycji
-app.get('/positions', (req, res) => res.json(officers));
+app.get('/positions', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.json(officers);
+});
 
 // Endpoint do zarządzania zgłoszeniami
-app.get('/reports', (req, res) => res.json(reports));
+app.get('/reports', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.json(reports);
+});
 
 app.post('/reports', async (req, res) => {
   try {
     const newReport = req.body;
     reports.push(newReport);
     await saveData(REPORTS_FILE, reports);
+    res.setHeader('Access-Control-Allow-Origin', '*');
     res.json({ status: 'ok', report: newReport });
   } catch (error) {
     res.status(500).json({ status: 'error', message: error.message });
@@ -115,6 +138,7 @@ app.put('/reports/:id', async (req, res) => {
     
     reports[index] = updatedReport;
     await saveData(REPORTS_FILE, reports);
+    res.setHeader('Access-Control-Allow-Origin', '*');
     res.json({ status: 'ok', report: updatedReport });
   } catch (error) {
     res.status(500).json({ status: 'error', message: error.message });
@@ -126,6 +150,7 @@ app.delete('/reports/:id', async (req, res) => {
     const reportId = req.params.id;
     reports = reports.filter(r => r.id !== reportId);
     await saveData(REPORTS_FILE, reports);
+    res.setHeader('Access-Control-Allow-Origin', '*');
     res.json({ status: 'ok', message: 'Zgłoszenie usunięte' });
   } catch (error) {
     res.status(500).json({ status: 'error', message: error.message });
@@ -133,7 +158,10 @@ app.delete('/reports/:id', async (req, res) => {
 });
 
 // Endpoint do zarządzania jednostkami
-app.get('/units', (req, res) => res.json(units));
+app.get('/units', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.json(units);
+});
 
 app.put('/units/:id', async (req, res) => {
   try {
@@ -142,10 +170,11 @@ app.put('/units/:id', async (req, res) => {
     
     units[unitId] = updatedUnit;
     await saveData(UNITS_FILE, units);
+    res.setHeader('Access-Control-Allow-Origin', '*');
     res.json({ status: 'ok', unit: updatedUnit });
   } catch (error) {
     res.status(500).json({ status: 'error', message: error.message });
   }
 });
 
-app.listen(PORT, () => console.log(`Serwer działa na http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`Serwer działa na porcie ${PORT}`));
