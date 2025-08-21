@@ -551,66 +551,75 @@ async function removeUnitFromReport(reportId, unitId) {
 }
 
 // --- Pobieranie danych z serwera ---
+// Zmiana funkcji fetchData - poprawione pobieranie danych
 async function fetchData() {
     try {
         // Pobierz wszystkie dane równolegle
         const [positionsResponse, reportsResponse, unitsResponse] = await Promise.all([
-            fetch(`${SERVER_URL}/positions`),
-            fetch(`${SERVER_URL}/reports`),
-            fetch(`${SERVER_URL}/units`)
+            fetch(`${SERVER_URL}/positions`).catch(err => ({ ok: false })),
+            fetch(`${SERVER_URL}/reports`).catch(err => ({ ok: false })),
+            fetch(`${SERVER_URL}/units`).catch(err => ({ ok: false }))
         ]);
 
-        if (!positionsResponse.ok || !reportsResponse.ok || !unitsResponse.ok) {
-            throw new Error('Błąd pobierania danych');
+        // Sprawdzanie czy odpowiedzi są poprawne
+        if (positionsResponse.ok) {
+            const positionsData = await positionsResponse.json();
+            
+            // Aktualizuj jednostki
+            Object.entries(positionsData).forEach(([id, unitData]) => {
+                const existingStatus = units[id]?.status || 'available';
+                const existingName = units[id]?.name || id;
+                
+                if (!units[id] || units[id].lat !== unitData.lat || units[id].lng !== unitData.lng) {
+                    updateUnit({
+                        id: id,
+                        name: existingName,
+                        lat: unitData.lat,
+                        lng: unitData.lng,
+                        status: existingStatus,
+                        timestamp: unitData.timestamp
+                    });
+                }
+            });
         }
 
-        const [positionsData, reportsData, unitsData] = await Promise.all([
-            positionsResponse.json(),
-            reportsResponse.json(),
-            unitsResponse.json()
-        ]);
-
-        // Aktualizuj jednostki
-        Object.entries(positionsData).forEach(([id, unitData]) => {
-            const existingStatus = units[id]?.status || 'available';
-            const existingName = units[id]?.name || id;
+        if (reportsResponse.ok) {
+            const reportsData = await reportsResponse.json();
+            // Aktualizuj zgłoszenia
+            reports = reportsData;
+            renderReports();
             
-            if (!units[id] || units[id].lat !== unitData.lat || units[id].lng !== unitData.lng) {
-                updateUnit({
-                    id: id,
-                    name: existingName,
-                    lat: unitData.lat,
-                    lng: unitData.lng,
-                    status: existingStatus,
-                    timestamp: unitData.timestamp
-                });
-            }
-        });
+            // Aktualizuj znaczniki zgłoszeń
+            reports.forEach(report => {
+                if (!markersReports[report.id]) {
+                    const circle = L.circleMarker([report.lat, report.lng], reportCircleStyles[report.tier])
+                        .addTo(map)
+                        .bindPopup(`
+                            <b>Zgłoszenie #${report.id}</b><br>
+                            <b>Tier:</b> ${report.tier}<br>
+                            <b>Opis:</b> ${report.description}<br>
+                            <b>Kontakt:</b> ${report.contact}<br>
+                            <b>Status:</b> ${report.status}
+                            ${report.assignedUnits && report.assignedUnits.length > 0 
+                                ? `<br><b>Przypisane jednostki:</b> ${report.assignedUnits.join(', ')}` 
+                                : ''}
+                            <br><button onclick="deleteReport('${report.id}')">Usuń zgłoszenie</button>
+                        `);
+                    
+                    markersReports[report.id] = circle;
+                }
+            });
+        }
 
-        // Aktualizuj zgłoszenia
-        reports = reportsData;
-        renderReports();
-        
-        // Aktualizuj znaczniki zgłoszeń
-        reports.forEach(report => {
-            if (!markersReports[report.id]) {
-                const circle = L.circleMarker([report.lat, report.lng], reportCircleStyles[report.tier])
-                    .addTo(map)
-                    .bindPopup(`
-                        <b>Zgłoszenie #${report.id}</b><br>
-                        <b>Tier:</b> ${report.tier}<br>
-                        <b>Opis:</b> ${report.description}<br>
-                        <b>Kontakt:</b> ${report.contact}<br>
-                        <b>Status:</b> ${report.status}
-                        ${report.assignedUnits && report.assignedUnits.length > 0 
-                            ? `<br><b>Przypisane jednostki:</b> ${report.assignedUnits.join(', ')}` 
-                            : ''}
-                        <br><button onclick="deleteReport('${report.id}')">Usuń zgłoszenie</button>
-                    `);
-                
-                markersReports[report.id] = circle;
-            }
-        });
+        if (unitsResponse.ok) {
+            const unitsData = await unitsResponse.json();
+            // Aktualizuj listę jednostek
+            Object.entries(unitsData).forEach(([id, unitData]) => {
+                if (!units[id] || JSON.stringify(units[id]) !== JSON.stringify(unitData)) {
+                    updateUnit(unitData);
+                }
+            });
+        }
 
     } catch (error) {
         console.error('Błąd pobierania danych:', error);
@@ -678,3 +687,4 @@ document.addEventListener('DOMContentLoaded', () => {
 </script>
 </body>
 </html>
+
