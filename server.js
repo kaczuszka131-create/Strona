@@ -109,6 +109,8 @@ app.get('/reports', (req, res) => {
   res.json(reports);
 });
 
+
+
 app.post('/reports', async (req, res) => {
   try {
     const newReport = req.body;
@@ -140,13 +142,14 @@ app.put('/reports/:id', async (req, res) => {
   }
 });
 
-app.delete('/reports/:id', async (req, res) => {
+// Dodaj do serwer.js w sekcji Zarządzanie jednostkami
+app.delete('/units/:id', async (req, res) => {
   try {
-    const reportId = req.params.id;
-    reports = reports.filter(r => r.id !== reportId);
-    await saveData(REPORTS_FILE, reports);
+    const unitId = req.params.id;
+    delete units[unitId];
+    await saveData(UNITS_FILE, units);
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.json({ status: 'ok', message: 'Zgłoszenie usunięte' });
+    res.json({ status: 'ok', message: 'Jednostka usunięta' });
   } catch (error) {
     res.status(500).json({ status: 'error', message: error.message });
   }
