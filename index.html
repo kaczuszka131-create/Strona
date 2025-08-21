@@ -154,6 +154,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 // Użyj dynamicznego URL serwera
+// Użyj dynamicznego URL serwera
 const SERVER_URL = window.location.origin;
 const map = L.map('map').setView([52.0, 19.0], 6);
 
@@ -212,7 +213,9 @@ async function addReport(report) {
                     <b>Opis:</b> ${report.description}<br>
                     <b>Kontakt:</b> ${report.contact}<br>
                     <b>Status:</b> ${report.status}
-                    ${report.assignedUnit ? `<br><b>Przypisana jednostka:</b> ${report.assignedUnit}` : ''}
+                    ${report.assignedUnits && report.assignedUnits.length > 0 
+                        ? `<br><b>Przypisane jednostki:</b> ${report.assignedUnits.join(', ')}` 
+                        : ''}
                     <br><button onclick="deleteReport('${report.id}')">Usuń zgłoszenie</button>
                 `);
             
@@ -235,6 +238,14 @@ async function deleteReport(reportId) {
             
             const result = await response.json();
             if (result.status === 'ok') {
+                // Zwolnij wszystkie przypisane jednostki
+                const report = reports.find(r => r.id === reportId);
+                if (report && report.assignedUnits) {
+                    report.assignedUnits.forEach(unitId => {
+                        changeUnitStatus(unitId, 'available');
+                    });
+                }
+                
                 // Usuń znacznik z mapy
                 if (markersReports[reportId]) {
                     map.removeLayer(markersReports[reportId]);
@@ -269,24 +280,31 @@ function renderReports() {
             Status: ${report.status}
         `;
         
-        // Przypisz jednostkę
-        if (!report.assignedUnit) {
-            const btn = document.createElement('button');
-            btn.className = 'assign-btn';
-            btn.innerText = 'Przypisz jednostkę';
-            btn.onclick = () => assignUnitToReport(report.id);
-            div.appendChild(btn);
-        } else {
-            div.innerHTML += `<br>Przypisana jednostka: ${report.assignedUnit}`;
+        // Wyświetl przypisane jednostki z przyciskami do usunięcia
+        if (report.assignedUnits && report.assignedUnits.length > 0) {
+            const unitsList = document.createElement('div');
+            unitsList.innerHTML = '<br><strong>Przypisane jednostki:</strong><br>';
             
-            // Przycisk zwolnienia jednostki
-            const releaseBtn = document.createElement('button');
-            releaseBtn.className = 'assign-btn';
-            releaseBtn.innerText = 'Zwolnij jednostkę';
-            releaseBtn.style.background = '#dc3545';
-            releaseBtn.onclick = () => releaseUnitFromReport(report.id);
-            div.appendChild(releaseBtn);
+            report.assignedUnits.forEach(unitId => {
+                const unitName = units[unitId]?.name || unitId;
+                const unitItem = document.createElement('div');
+                unitItem.innerHTML = `
+                    ${unitName}
+                    <button class="delete-btn" onclick="removeUnitFromReport('${report.id}', '${unitId}')" 
+                            style="font-size: 0.7em; padding: 2px 5px;">X</button>
+                `;
+                unitsList.appendChild(unitItem);
+            });
+            
+            div.appendChild(unitsList);
         }
+        
+        // Przycisk przypisania jednostki
+        const btn = document.createElement('button');
+        btn.className = 'assign-btn';
+        btn.innerText = 'Przypisz jednostkę';
+        btn.onclick = () => assignUnitToReport(report.id);
+        div.appendChild(btn);
         
         div.onclick = () => {
             map.setView([report.lat, report.lng], 16);
@@ -351,7 +369,8 @@ function renderUnits() {
         const div = document.createElement('div');
         div.className = `unit-item ${unit.status || 'available'}`;
         div.innerHTML = `
-            <strong>${unit.id}</strong><br>
+            <strong>${unit.id}</strong>
+            <button class="delete-btn" onclick="deleteUnit('${unit.id}')" style="font-size: 0.7em; padding: 2px 5px;">X</button><br>
             ${unit.name}<br>
             Status: ${unit.status || 'available'}
         `;
@@ -376,6 +395,45 @@ function renderUnits() {
         
         container.appendChild(div);
     });
+}
+
+// --- Usuwanie jednostki ---
+async function deleteUnit(unitId) {
+    if (confirm('Czy na pewno chcesz usunąć tę jednostkę?')) {
+        try {
+            // Usuń jednostkę z wszystkich zgłoszeń
+            reports.forEach(report => {
+                if (report.assignedUnits && report.assignedUnits.includes(unitId)) {
+                    report.assignedUnits = report.assignedUnits.filter(id => id !== unitId);
+                    // Aktualizuj zgłoszenie na serwerze
+                    fetch(`${SERVER_URL}/reports/${report.id}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(report)
+                    });
+                }
+            });
+            
+            // Usuń jednostkę z listy
+            delete units[unitId];
+            
+            // Usuń znacznik z mapy
+            if (markersUnits[unitId]) {
+                map.removeLayer(markersUnits[unitId]);
+                delete markersUnits[unitId];
+            }
+            
+            // Aktualizuj serwer
+            await fetch(`${SERVER_URL}/units/${unitId}`, {
+                method: 'DELETE'
+            });
+            
+            renderUnits();
+            renderReports();
+        } catch (error) {
+            console.error('Błąd usuwania jednostki:', error);
+        }
+    }
 }
 
 // --- Zmiana statusu jednostki ---
@@ -424,7 +482,19 @@ async function assignUnitToReport(reportId) {
     if (unitToAssign) {
         const reportIndex = reports.findIndex(r => r.id === reportId);
         if (reportIndex !== -1) {
-            reports[reportIndex].assignedUnit = unitToAssign.id;
+            // Inicjalizuj tablicę assignedUnits jeśli nie istnieje
+            if (!reports[reportIndex].assignedUnits) {
+                reports[reportIndex].assignedUnits = [];
+            }
+            
+            // Sprawdź czy jednostka już jest przypisana
+            if (reports[reportIndex].assignedUnits.includes(unitToAssign.id)) {
+                alert('Ta jednostka jest już przypisana do tego zgłoszenia!');
+                return;
+            }
+            
+            // Dodaj jednostkę do zgłoszenia
+            reports[reportIndex].assignedUnits.push(unitToAssign.id);
             
             // Aktualizuj zgłoszenie na serwerze
             try {
@@ -451,12 +521,12 @@ async function assignUnitToReport(reportId) {
     }
 }
 
-// --- Zwolnienie jednostki ze zgłoszenia ---
-async function releaseUnitFromReport(reportId) {
+// --- Usuwanie jednostki ze zgłoszenia ---
+async function removeUnitFromReport(reportId, unitId) {
     const reportIndex = reports.findIndex(r => r.id === reportId);
-    if (reportIndex !== -1 && reports[reportIndex].assignedUnit) {
-        const unitId = reports[reportIndex].assignedUnit;
-        reports[reportIndex].assignedUnit = null;
+    if (reportIndex !== -1 && reports[reportIndex].assignedUnits) {
+        // Usuń jednostkę z listy przypisanych
+        reports[reportIndex].assignedUnits = reports[reportIndex].assignedUnits.filter(id => id !== unitId);
         
         // Aktualizuj zgłoszenie na serwerze
         try {
@@ -475,7 +545,7 @@ async function releaseUnitFromReport(reportId) {
                 renderReports();
             }
         } catch (error) {
-            console.error('Błąd zwalniania jednostki:', error);
+            console.error('Błąd usuwania jednostki ze zgłoszenia:', error);
         }
     }
 }
@@ -532,7 +602,9 @@ async function fetchData() {
                         <b>Opis:</b> ${report.description}<br>
                         <b>Kontakt:</b> ${report.contact}<br>
                         <b>Status:</b> ${report.status}
-                        ${report.assignedUnit ? `<br><b>Przispisana jednostka:</b> ${report.assignedUnit}` : ''}
+                        ${report.assignedUnits && report.assignedUnits.length > 0 
+                            ? `<br><b>Przypisane jednostki:</b> ${report.assignedUnits.join(', ')}` 
+                            : ''}
                         <br><button onclick="deleteReport('${report.id}')">Usuń zgłoszenie</button>
                     `);
                 
@@ -568,7 +640,7 @@ document.getElementById('createReport').addEventListener('click', () => {
         lat: selectedLatLng.lat,
         lng: selectedLatLng.lng,
         timestamp: Date.now(),
-        assignedUnit: null
+        assignedUnits: []  // Teraz to tablica, nie pojedyncza wartość
     };
 
     addReport(report);
