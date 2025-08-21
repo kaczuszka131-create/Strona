@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<title>Centrum Dyspozytorskie</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+<style>
+    body, html { margin: 0; height: 100%; font-family: Arial, sans-serif; }
+    #container { display: flex; height: 100%; }
+    #map { flex: 1; height: 100%; }
+    #sidebar {
+        width: 360px;
+        background: #f7f7f7;
+        padding: 10px;
+        box-shadow: -2px 0 5px rgba(0,0,0,0.2);
+        overflow-y: auto;
+    }
+    h2 { margin-top: 0; font-size: 18px; }
+    label { display: block; margin-top: 8px; font-weight: bold; }
+    input, select, textarea, button { width: 100%; margin-top: 4px; padding: 5px; font-size: 14px; }
+    textarea { resize: vertical; }
+    .report-item, .unit-item {
+        padding: 6px 8px;
+        margin-bottom: 6px;
+        border-radius: 5px;
+        background: #fff;
+        border-left: 4px solid #007bff;
+        cursor: pointer;
+        position: relative;
+    }
+    .report-item.tier-1 { border-left-color: green; }
+    .report-item.tier-2 { border-left-color: orange; }
+    .report-item.tier-3 { border-left-color: red; }
+    .unit-item { border-left-color: #007bff; }
+    .unit-item.available { background: #e0f0ff; border-left-color: green; }
+    .unit-item.unavailable { background: #ffe0e0; border-left-color: red; }
+    .unit-item.on-intervention { background: #fff0e0; border-left-color: orange; }
+    #coordsDisplay { font-size: 12px; color: #555; margin-top: 4px; }
+    .assign-btn, .delete-btn {
+        margin-top: 4px;
+        color: white;
+        border: none;
+        padding: 3px 6px;
+        cursor: pointer;
+        border-radius: 3px;
+        font-size: 12px;
+    }
+    .assign-btn {
+        background: #007bff;
+    }
+    .delete-btn {
+        background: #dc3545;
+    }
+    .unit-status-btn {
+        margin-top: 4px;
+        margin-right: 4px;
+        padding: 3px 6px;
+        cursor: pointer;
+        border-radius: 3px;
+        font-size: 12px;
+        border: 1px solid #ccc;
+    }
+    .callsign-edit {
+        display: flex;
+        margin-top: 8px;
+    }
+    .callsign-edit input {
+        flex: 1;
+        margin-right: 4px;
+    }
+    .callsign-edit button {
+        width: auto;
+    }
+</style>
+</head>
+<body>
+<div id="container">
+    <div id="map"></div>
+    <div id="sidebar">
+        <h2>Tworzenie zgłoszenia</h2>
+        <label for="tier">Tier zgłoszenia:</label>
+        <select id="tier">
+            <option value="1">1 - Niski priorytet</option>
+            <option value="2">2 - Średni priorytet</option>
+            <option value="3">3 - Wysoki priorytet</option>
+        </select>
+
+        <label for="description">Opis:</label>
+        <textarea id="description" rows="3"></textarea>
+
+        <label for="contact">Kontakt:</label>
+        <input type="text" id="contact" placeholder="Numer telefonu">
+
+        <label for="status">Status:</label>
+        <select id="status">
+            <option value="Otwarty">Otwarty</option>
+            <option value="W trakcie">W trakcie</option>
+            <option value="Zamknięty">Zamknięty</option>
+        </select>
+
+        <button id="createReport">Stwórz zgłoszenie</button>
+        <div id="coordsDisplay">Nie wybrano lokalizacji</div>
+
+        <h2>Lista zgłoszeń</h2>
+        <div id="reportsList"></div>
+
+        <h2>Lista jednostek</h2>
+        <div id="unitsList"></div>
+        
+        <h2>Zarządzanie callsignami</h2>
+        <div class="callsign-edit">
+            <input type="text" id="unitIdInput" placeholder="ID jednostki">
+            <input type="text" id="newCallsignInput" placeholder="Nowy callsign">
+            <button id="changeCallsignBtn">Zmień</button>
+        </div>
+    </div>
+</div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script>
+const SERVER_URL = 'http://localhost:3000';
+const map = L.map('map').setView([52.0, 19.0], 6);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '© OpenStreetMap'
+}).addTo(map);
+
+let markersReports = {};
+let markersUnits = {};
+let reports = [];
+let units = {};
+let selectedLatLng = null;
+
+// Style kółek dla jednostek w zależności od statusu
+const unitCircleStyles = {
+    available: { color: 'green', fillColor: '#00ff00', fillOpacity: 0.7, radius: 10 },
+    unavailable: { color: 'red', fillColor: '#ff0000', fillOpacity: 0.7, radius: 10 },
+    'on-intervention': { color: 'orange', fillColor: '#ff9900', fillOpacity: 0.7, radius: 10 }
+};
+
+// Style kółek dla zgłoszeń w zależności od tieru
+const reportCircleStyles = {
+    1: { color: 'green', fillColor: '#00ff00', fillOpacity: 0.7, radius: 12 },
+    2: { color: 'orange', fillColor: '#ff9900', fillOpacity: 0.7, radius: 12 },
+    3: { color: 'red', fillColor: '#ff0000', fillOpacity: 0.7, radius: 12 }
+};
+
+// --- Kliknięcie na mapie ustawia lokalizację zgłoszenia ---
+map.on('click', (e) => {
+    selectedLatLng = e.latlng;
+    document.getElementById('coordsDisplay').innerText = `Wybrano lokalizację: ${selectedLatLng.lat.toFixed(5)}, ${selectedLatLng.lng.toFixed(5)}`;
+});
+
+// --- Dodawanie zgłoszenia ---
+function addReport(report) {
+    reports.push(report);
+    
+    // Koło dla zgłoszenia z odpowiednim kolorem
+    const circle = L.circleMarker([report.lat, report.lng], reportCircleStyles[report.tier])
+        .addTo(map)
+        .bindPopup(`
+            <b>Zgłoszenie #${report.id}</b><br>
+            <b>Tier:</b> ${report.tier}<br>
+            <b>Opis:</b> ${report.description}<br>
+            <b>Kontakt:</b> ${report.contact}<br>
+            <b>Status:</b> ${report.status}
+            ${report.assignedUnit ? `<br><b>Przypisana jednostka:</b> ${report.assignedUnit}` : ''}
+            <br><button onclick="deleteReport(${report.id})">Usuń zgłoszenie</button>
+        `);
+    
+    markersReports[report.id] = circle;
+    renderReports();
+}
+
+// --- Usuwanie zgłoszenia ---
+function deleteReport(reportId) {
+    if (confirm('Czy na pewno chcesz usunąć to zgłoszenie?')) {
+        // Usuń znacznik z mapy
+        if (markersReports[reportId]) {
+            map.removeLayer(markersReports[reportId]);
+            delete markersReports[reportId];
+        }
+        
+        // Usuń zgłoszenie z listy
+        reports = reports.filter(report => report.id !== reportId.toString());
+        renderReports();
+    }
+}
+
+// --- Render listy zgłoszeń ---
+function renderReports() {
+    const container = document.getElementById('reportsList');
+    container.innerHTML = '';
+    
+    // Sortowanie zgłoszeń - najnowsze na górze
+    const sortedReports = [...reports].sort((a, b) => b.timestamp - a.timestamp);
+    
+    sortedReports.forEach(report => {
+        const div = document.createElement('div');
+        div.className = `report-item tier-${report.tier}`;
+        div.innerHTML = `
+            <strong>Zgłoszenie #${report.id}</strong>
+            <button class="delete-btn" onclick="deleteReport('${report.id}')">X</button><br>
+            Tier ${report.tier} | ${report.description.slice(0,30)}...<br>
+            Status: ${report.status}
+        `;
+        
+        // Przypisz jednostkę
+        if (!report.assignedUnit) {
+            const btn = document.createElement('button');
+            btn.className = 'assign-btn';
+            btn.innerText = 'Przypisz jednostkę';
+            btn.onclick = () => assignUnitToReport(report.id);
+            div.appendChild(btn);
+        } else {
+            div.innerHTML += `<br>Przypisana jednostka: ${report.assignedUnit}`;
+            
+            // Przycisk zwolnienia jednostki
+            const releaseBtn = document.createElement('button');
+            releaseBtn.className = 'assign-btn';
+            releaseBtn.innerText = 'Zwolnij jednostkę';
+            releaseBtn.style.background = '#dc3545';
+            releaseBtn.onclick = () => releaseUnitFromReport(report.id);
+            div.appendChild(releaseBtn);
+        }
+        
+        div.onclick = () => {
+            map.setView([report.lat, report.lng], 16);
+            markersReports[report.id].openPopup();
+        };
+        
+        container.appendChild(div);
+    });
+}
+
+// --- Dodawanie / aktualizacja jednostek ---
+function updateUnit(unitData) {
+    const id = unitData.id;
+    units[id] = unitData;
+
+    // Aktualizuj koło jednostki
+    if (markersUnits[id]) {
+        markersUnits[id].setLatLng([unitData.lat, unitData.lng]);
+        markersUnits[id].setStyle(unitCircleStyles[unitData.status] || unitCircleStyles.available);
+        
+        // Aktualizuj popup
+        markersUnits[id].setPopupContent(`
+            <b>${unitData.name} (${id})</b><br>
+            Status: ${unitData.status}<br>
+            Ostatnia aktualizacja: ${new Date(unitData.timestamp || Date.now()).toLocaleTimeString()}
+        `);
+    } else {
+        const circle = L.circleMarker([unitData.lat, unitData.lng], unitCircleStyles[unitData.status] || unitCircleStyles.available)
+            .addTo(map)
+            .bindPopup(`
+                <b>${unitData.name} (${id})</b><br>
+                Status: ${unitData.status}<br>
+                Ostatnia aktualizacja: ${new Date(unitData.timestamp || Date.now()).toLocaleTimeString()}
+            `);
+        markersUnits[id] = circle;
+    }
+
+    renderUnits();
+}
+
+// --- Render listy jednostek ---
+function renderUnits() {
+    const container = document.getElementById('unitsList');
+    container.innerHTML = '';
+    
+    Object.values(units).forEach(unit => {
+        const div = document.createElement('div');
+        div.className = `unit-item ${unit.status || 'available'}`;
+        div.innerHTML = `
+            <strong>${unit.id}</strong><br>
+            ${unit.name}<br>
+            Status: ${unit.status || 'available'}
+        `;
+        
+        // Przyciski zmiany statusu
+        const statuses = ['available', 'unavailable', 'on-intervention'];
+        statuses.forEach(status => {
+            if (unit.status !== status) {
+                const btn = document.createElement('button');
+                btn.className = 'unit-status-btn';
+                btn.innerText = status === 'available' ? 'Dostępny' : 
+                               status === 'unavailable' ? 'Niedostępny' : 'Na interwencji';
+                btn.onclick = () => changeUnitStatus(unit.id, status);
+                div.appendChild(btn);
+            }
+        });
+        
+        div.onclick = () => {
+            map.setView([unit.lat, unit.lng], 16);
+            markersUnits[unit.id].openPopup();
+        };
+        
+        container.appendChild(div);
+    });
+}
+
+// --- Zmiana statusu jednostki ---
+function changeUnitStatus(unitId, newStatus) {
+    if (units[unitId]) {
+        units[unitId].status = newStatus;
+        updateUnit(units[unitId]);
+    }
+}
+
+// --- Zmiana callsignu jednostki ---
+function changeUnitCallsign(unitId, newCallsign) {
+    if (units[unitId]) {
+        units[unitId].name = newCallsign;
+        updateUnit(units[unitId]);
+        alert(`Callsign jednostki ${unitId} zmieniony na: ${newCallsign}`);
+    } else {
+        alert(`Jednostka o ID ${unitId} nie istnieje!`);
+    }
+}
+
+// --- Przypisanie jednostki do zgłoszenia ---
+function assignUnitToReport(reportId) {
+    const availableUnits = Object.values(units).filter(u => u.status === 'available');
+    if (availableUnits.length === 0) {
+        alert('Brak dostępnych jednostek do przypisania!');
+        return;
+    }
+    
+    const unitList = availableUnits.map(u => `${u.id} (${u.name})`).join('\n');
+    const userInput = prompt('Podaj ID LUB callsign jednostki do przypisania:\nDostępne jednostki:\n' + unitList);
+    
+    if (!userInput) return;
+    
+    // Szukaj jednostki po ID lub callsign
+    let unitToAssign = null;
+    
+    // Najpierw sprawdź po ID
+    if (units[userInput]) {
+        unitToAssign = units[userInput];
+    } else {
+        // Jeśli nie znaleziono po ID, szukaj po callsign
+        unitToAssign = Object.values(units).find(u => u.name === userInput);
+    }
+    
+    if (unitToAssign) {
+        const report = reports.find(r => r.id === reportId);
+        if (report) {
+            report.assignedUnit = unitToAssign.id;
+            // Zmień status jednostki na "na interwencji"
+            changeUnitStatus(unitToAssign.id, 'on-intervention');
+            renderReports();
+        }
+    } else {
+        alert(`Nie znaleziono jednostki o ID/callsign: ${userInput}`);
+    }
+}
+
+// --- Zwolnienie jednostki ze zgłoszenia ---
+function releaseUnitFromReport(reportId) {
+    const report = reports.find(r => r.id === reportId);
+    if (report && report.assignedUnit) {
+        const unitId = report.assignedUnit;
+        report.assignedUnit = null;
+        // Zmień status jednostki na "dostępny"
+        changeUnitStatus(unitId, 'available');
+        renderReports();
+    }
+}
+
+// --- Obsługa przycisku tworzenia zgłoszenia ---
+document.getElementById('createReport').addEventListener('click', () => {
+    const tier = document.getElementById('tier').value;
+    const description = document.getElementById('description').value;
+    const contact = document.getElementById('contact').value;
+    const status = document.getElementById('status').value;
+
+    if (!selectedLatLng) return alert('Kliknij na mapie, aby ustawić lokalizację zgłoszenia!');
+    if (!description) return alert('Podaj opis zgłoszenia!');
+
+    // Generuj trzycyfrowe ID (001, 002, ..., 999)
+    const nextId = reports.length > 0 
+        ? Math.max(...reports.map(r => parseInt(r.id))) + 1 
+        : 1;
+    
+    const reportId = nextId.toString().padStart(3, '0');
+    
+    const report = {
+        id: reportId,
+        tier, description, contact, status,
+        lat: selectedLatLng.lat,
+        lng: selectedLatLng.lng,
+        timestamp: Date.now()
+    };
+
+    addReport(report);
+
+    // Reset
+    document.getElementById('description').value = '';
+    document.getElementById('contact').value = '';
+    selectedLatLng = null;
+    document.getElementById('coordsDisplay').innerText = 'Nie wybrano lokalizacji';
+});
+
+// --- Obsługa zmiany callsignu ---
+document.getElementById('changeCallsignBtn').addEventListener('click', () => {
+    const unitId = document.getElementById('unitIdInput').value;
+    const newCallsign = document.getElementById('newCallsignInput').value;
+    
+    if (!unitId) return alert('Podaj ID jednostki!');
+    if (!newCallsign) return alert('Podaj nowy callsign!');
+    
+    changeUnitCallsign(unitId, newCallsign);
+    
+    // Reset formularza
+    document.getElementById('unitIdInput').value = '';
+    document.getElementById('newCallsignInput').value = '';
+});
+
+// --- Pobieranie pozycji z serwera ---
+function fetchPositions() {
+    fetch(`${SERVER_URL}/positions`)
+        .then(response => response.json())
+        .then(data => {
+            // Aktualizuj jednostki na podstawie danych z serwera
+            Object.entries(data).forEach(([id, unitData]) => {
+                // Zachowaj istniejący status jeśli jednostka już istnieje
+                const existingStatus = units[id]?.status || 'available';
+                const existingName = units[id]?.name || id; // Zachowaj istniejący callsign
+                
+                updateUnit({
+                    id: id,
+                    name: existingName,
+                    lat: unitData.lat,
+                    lng: unitData.lng,
+                    status: existingStatus,
+                    timestamp: unitData.timestamp
+                });
+            });
+        })
+        .catch(error => console.error('Błąd pobierania pozycji:', error));
+}
+
+// Inicjalizacja z przykładowymi jednostkami
+function initializeUnits() {
+    // Przykładowe jednostki
+    const exampleUnits = [
+    ];
+    
+    exampleUnits.forEach(u => updateUnit(u));
+}
+
+// Regularne pobieranie pozycji co 5 sekund
+setInterval(fetchPositions, 5000);
+
+// Inicjalizacja przy starcie
+setTimeout(() => {
+    initializeUnits();
+    fetchPositions();
+}, 1000);
+</script>
+</body>
+</html>
